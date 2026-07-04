@@ -77,12 +77,4 @@ concommand.Add("reload_modules", function( ply, cmd, args )
     end
 end )
 
---[[ hook.Add( "InitPostEntity", "load_modules", function()
-    LoadModules()
-end ) ]]
-
---[[ hook.Add( "Initialize", "load_modules", function()
-    LoadModules()
-end ) ]]
-
 LoadModules()
