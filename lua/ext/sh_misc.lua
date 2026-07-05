@@ -1,3 +1,4 @@
+local player = player
 local _G = _G
 local PLAYER = FindMetaTable("Player")
 local SWEP = FindMetaTable("Weapon")
@@ -14,6 +15,19 @@ game.GetWorld = GetWorldEntity or Entity(0)
 game.MaxPlayers = MaxPlayers
 game.IsDedicated = isDedicatedServer
 game.SinglePlayer = SinglePlayer
+
+-- Gets the player with the specified SteamID.
+function player.GetBySteamID( ID )
+    ID = string.upper( ID )
+
+    for _, pl in pairs( player.GetAll() ) do
+        if ( pl:IsValid() && pl:IsPlayer() && pl:SteamID() == ID )	then
+            return pl
+        end
+    end
+
+    return false
+end
 
 if CLIENT then
     -- Unsupported:
