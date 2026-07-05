@@ -21,7 +21,7 @@ function player.GetBySteamID( ID )
     ID = string.upper( ID )
 
     for _, pl in pairs( player.GetAll() ) do
-        if ( pl:IsValid() && pl:IsPlayer() && pl:SteamID() == ID )	then
+        if ( pl:IsValid() && pl:IsPlayer() && pl:SteamID() == ID ) then
             return pl
         end
     end
