@@ -42,7 +42,7 @@ function http.Post( ... )
 -- Stub
 end
 
-function resource.AddWorkshop ( ... )
+function resource.AddWorkshop( ... )
 -- Stub
 end
 
@@ -87,6 +87,8 @@ end
 
 -- Gets the player with the specified SteamID.
 function player.GetBySteamID( ID )
+    ID = string.upper( ID )
+
     for _, pl in pairs( player.GetAll() ) do
         if ( pl:IsValid() and pl:IsPlayer() and pl:SteamID() == ID ) then
             return pl
@@ -97,8 +99,6 @@ function player.GetBySteamID( ID )
 end
 
 function player.GetBySteamID64( ID )
-    ID = string.upper( ID )
-
     for _, pl in pairs( player.GetAll() ) do
         if ( pl:IsValid() and pl:IsPlayer() and pl:SteamID64() == ID ) then
             return pl
