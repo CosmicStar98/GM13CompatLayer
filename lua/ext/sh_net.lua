@@ -1,12 +1,10 @@
--- net library shim for GMod 12
 -- GMod 13-style net API transported through GMod 12 datastream.
 --
 -- Wire format:
 --   { id = <number> or name = <string>, bits = <number>, data = { {t=..., v=...}, ... } }
 --
 -- The actual values are carried in data. The bit count is metadata used by
--- BytesLeft/BytesWritten compatibility functions. BitBuffer is intentionally
--- not used as the transport: datastream already serializes Lua tables.
+-- BytesLeft/BytesWritten compatibility functions.
 
 local netStringPool = CreateConVar(
     "sv_net_stringpool",
