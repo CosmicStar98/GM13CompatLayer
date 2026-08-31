@@ -1,4 +1,5 @@
 local util = util
+local PLAYER = FindMetaTable("Player")
 
 util.KeyValuesToTablePreserveOrder = KeyValuesToTablePreserveOrder
 util.KeyValuesToTable = KeyValuesToTable
@@ -263,6 +264,16 @@ end
 -- Helper for the following functions. This is not ideal but we cannot change this because it will break existing addons.
 local function GetUniqueID( sid )
     return util.CRC( "gm_" .. sid .. "_gm" )
+end
+
+function util.IsPlayerSpeaking( entIndex )
+    local ply = Entity( entIndex )
+
+    if not ply or not ply:IsPlayer() then
+        return false
+    end
+
+    return ply:IsSpeaking()
 end
 
 -- Gets persistent data of an offline player using their SteamID.

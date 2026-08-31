@@ -1,13 +1,29 @@
 local player = player
+local util = util
 local _G = _G
 local PLAYER = FindMetaTable("Player")
 local SWEP = FindMetaTable("Weapon")
 
-PLAYER.GetAimVector = PLAYER.GetCursorAimVector
+_G.IsPlayerSpeaking = function(ply)
+    if !ply then return false end
+    return ply:IsSpeaking()
+end
+PLAYER:GetAimVector = PLAYER:GetCursorAimVector
 SWEP.SetHoldType = SWEP.SetWeaponHoldType
+isValid = IsValid
+
+function SafeRemoveEntity( ent )
+    if ( !IsValid(ent) or ent:IsPlayer() ) then return end
+    ent:Remove()
+end
+
+function SafeRemoveEntityDelayed( ent, timedelay )
+    if ( !IsValid(ent) or ent:IsPlayer() ) then return end
+    timer.Simple( timedelay, function() SafeRemoveEntity(ent) end )
+end
 
 function sql.IndexExists( name )
-    local r = sql.Query( "SELECT name FROM sqlite_master WHERE name=" .. SQLStr( name ) .. " AND type='index'" )
+    local r = sql.Query( "SELECT name FROM sqlite_master WHERE name=" .. SQLStr(name) .. " AND type='index'" )
     return r and true or false
 end
 
@@ -16,12 +32,75 @@ game.MaxPlayers = MaxPlayers
 game.IsDedicated = isDedicatedServer
 game.SinglePlayer = SinglePlayer
 
+function game.AddParticles( path )
+-- Stub
+end
+
+http.Fetch = http.Get
+
+function http.Post( ... )
+-- Stub
+end
+
+function resource.AddWorkshop ( ... )
+-- Stub
+end
+
+function PLAYER:SteamID64()
+    local steamid = self:SteamID()
+
+    -- Bots / invalid SteamIDs
+    if steamid == "BOT" then
+        return "90071996842377216"
+    end
+
+    local parts = string.Explode( ":", steamid )
+
+    if #parts ~= 3 then
+        return "0"
+    end
+
+    local y = tonumber( parts[2] )
+    local z = tonumber( parts[3] )
+
+    if not y or not z then
+        return "0"
+    end
+
+    local base = "76561197960265728"
+    local add = z * 2 + y
+
+    -- add is normally small enough to be represented safely.
+    local result = tonumber( base:sub(-6) ) + add
+
+    local high = base:sub(1, -7)
+
+    if result >= 1000000 then
+        result = result - 1000000
+
+        local highNum = tonumber( high ) + 1
+        return tostring( highNum ) .. string.format( "%06d", result )
+    end
+
+    return high .. string.format( "%06d", result )
+end
+
 -- Gets the player with the specified SteamID.
 function player.GetBySteamID( ID )
+    for _, pl in pairs( player.GetAll() ) do
+        if ( pl:IsValid() and pl:IsPlayer() and pl:SteamID() == ID ) then
+            return pl
+        end
+    end
+
+    return false
+end
+
+function player.GetBySteamID64( ID )
     ID = string.upper( ID )
 
     for _, pl in pairs( player.GetAll() ) do
-        if ( pl:IsValid() and pl:IsPlayer() and pl:SteamID() == ID ) then
+        if ( pl:IsValid() and pl:IsPlayer() and pl:SteamID64() == ID ) then
             return pl
         end
     end

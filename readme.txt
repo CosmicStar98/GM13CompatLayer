@@ -14,6 +14,16 @@ on this project and hope others collaborate to make this better for everyone! (â
 
 ========================================
 
+KEY FEATURES:
+- Extended math, string & table libraries
+- Backported net library implementation (as of v1.1)
+- Backported file library syntax (as of v1.1)
+- Basic sound library
+- Baseclass system (as of v1.1)
+- Many other tiny things between 12<->13 fixed!
+
+========================================
+
 HOW TO INSTALL: ---> do NOT put inside addons folder!! <---
 place in garrysmod/ folder.
 
@@ -34,7 +44,7 @@ when inside /addons/ it either loads too early or too late, causing many errors.
 TODO LIST: (in order of priority high/low)
 - lua headers
 - make a module base
-- net lib
-- file lib
+- native net lib
+- native file lib
 - http lib
-- bass lib
+- bass lib (native sound lib)

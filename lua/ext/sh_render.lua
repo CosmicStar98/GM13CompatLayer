@@ -14,6 +14,6 @@ IMAT.SetString = IMAT.SetMaterialString
 IMAT.SetTexture = IMAT.SetMaterialTexture
 IMAT.SetVector = IMAT.SetMaterialVector
 
-render.MaterialOverride = function(mat)
+function render.MaterialOverride(mat)
     SetMaterialOverride(mat)
 end
