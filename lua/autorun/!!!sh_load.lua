@@ -1,5 +1,5 @@
 -- borrowed from gmod tower
-DirLoader = {}
+module( "DirLoader", package.seeall )
 
 DEBUG = true
 
@@ -47,7 +47,7 @@ function SelectiveInclude( dir, name )
     Include( File, name )
 end
 
-function LoadFolder( dir )
+function LoadFolder( dir, order )
 
     local LoadDir = dir .. "/"
     local FileList = file.FindInLua( LoadDir .. "*" )
@@ -55,12 +55,21 @@ function LoadFolder( dir )
     if !FileList then return end
 
     if DEBUG then
-        Msg("Loading " .. LoadDir .. " (".. #FileList ..")\n")
+        Msg("Loading " .. LoadDir .. " (" .. #FileList .. ")\n")
     end
 
-    for _, name in pairs( FileList ) do
-        if ValidName( name ) then
-            SelectiveInclude( LoadDir, name )
+    local loaded = {}
+
+    if order then
+        for _, name in ipairs(order) do
+            SelectiveInclude(LoadDir, name)
+            loaded[name] = true
+        end
+    end
+
+    for _, name in pairs(FileList) do
+        if ValidName(name) and !loaded[name] then
+            SelectiveInclude(LoadDir, name)
         end
     end
 
@@ -68,13 +77,7 @@ end
 
 local function LoadModules()
     LoadFolder("libs")
-    LoadFolder("ext")
+    LoadFolder( "ext", {"sh_misc.lua", "sh_typecheck.lua"} )
 end
-
-concommand.Add("reload_modules", function( ply, cmd, args )
-    if ply == NULL then
-        LoadModules()
-    end
-end )
 
 LoadModules()

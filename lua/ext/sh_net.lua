@@ -1,4 +1,5 @@
--- GMod 13-style net API transported through GMod 12 datastream.
+-- net library shim for GMod 12
+-- Garry's Mod 13 net API transported through datastream.
 --
 -- Wire format:
 --   { id = <number> or name = <string>, bits = <number>, data = { {t=..., v=...}, ... } }
@@ -6,14 +7,17 @@
 -- The actual values are carried in data. The bit count is metadata used by
 -- BytesLeft/BytesWritten compatibility functions.
 
+
+-- Although you can technically disable this, you probably shouldn't.
+-- THIS ONLY EXISTS FOR TESTING. WILL BE REMOVED LATER!
 local netStringPool = CreateConVar(
-    "sv_net_stringpool",
-    "1",
+    "sv_net_stringpool", "1",
     { FCVAR_REPLICATED, FCVAR_ARCHIVE },
     "Use numeric IDs for net message names."
 )
 
-module("net", package.seeall)
+module( "net", package.seeall )
+
 net = net or {}
 net.Receivers = net.Receivers or {}
 net.WriteVars = net.WriteVars or {}
@@ -27,11 +31,16 @@ local _nameToID = {}
 local _idToName = {}
 local _nextID = 1
 
--- ---------------------------------------------------------------------------
--- Network string registry
+-- TODO: make a logger to properly handle stuff
+--  instead of creating unique error/ErrorNoHalt calls every time the player is informed of their wrongdoings.
+--  also have this logger leverage a lookup table to support potential translations
+--  in the future...
+
 -- ---------------------------------------------------------------------------
 
-local function _validStringName(name, fn)
+-- Net helpers
+-- TODO: merge _isValidNWString, _isValidNWIdentifier & _checkWrite into one function
+local function _isValidNWString( name, fn )
     if type(name) ~= "string" then
         error("[net] " .. fn .. ": expected string name, got " .. type(name), 3)
     end
@@ -40,8 +49,17 @@ local function _validStringName(name, fn)
     end
 end
 
-function util.AddNetworkString(name)
-    _validStringName(name, "AddNetworkString")
+local function _isValidNWIdentifier( id, fn )
+    if type(id) ~= "number" then
+        error("[net] " .. fn .. ": expected string ID, got " .. type(id), 3)
+    end
+    if id == "" then
+        error("[net] " .. fn .. ": network ID cannot be empty", 3)
+    end
+end
+
+function util.AddNetworkString( name )
+    _isValidNWString(name, "AddNetworkString")
 
     if !netStringPool:GetBool() then
         return 0
@@ -68,59 +86,91 @@ function util.AddNetworkString(name)
     return id
 end
 
+function util.NetworkIDToString( netID )
+    _isValidNWIdentifier(netID, "NetworkIDToString")
+
+    return _idToName[netID]
+end
+
+-- Datastream Hooks
 if CLIENT then
-    datastream.Hook(ADD_STRING, function(handler, id, encoded, decoded)
+    datastream.Hook( ADD_STRING, function( handler, id, encoded, decoded )
         if !istable(decoded) then return end
         if type(decoded.name) ~= "string" or type(decoded.id) ~= "number" then return end
 
         _nameToID[decoded.name] = decoded.id
         _idToName[decoded.id] = decoded.name
-    end)
+    end )
 
-    datastream.Hook(SYNC_STRINGS, function(handler, id, encoded, decoded)
+    datastream.Hook( SYNC_STRINGS, function( handler, id, encoded, decoded )
         if !istable(decoded) then return end
 
-        for name, nid in pairs(decoded) do
+        for name, nid in pairs( decoded ) do
             if type(name) == "string" and type(nid) == "number" then
                 _nameToID[name] = nid
                 _idToName[nid] = name
             end
         end
-    end)
+    end )
 end
 
 if SERVER then
-    hook.Add("PlayerInitialSpawn", "net_shim_syncstrings", function(ply)
+    hook.Add( "PlayerInitialSpawn", "net_syncstrings", function( ply )
         if next(_nameToID) then
-            datastream.StreamToClients(ply, SYNC_STRINGS, _nameToID)
+            datastream.StreamToClients( ply, SYNC_STRINGS, _nameToID )
         end
-    end)
+    end )
 end
 
+
 -- ---------------------------------------------------------------------------
--- Outgoing state
+-- Core functions
 -- ---------------------------------------------------------------------------
 
 -- IMPORTANT:
 -- _msg is one temporary message currently being built by net.Start().
 -- It lives only inside this Lua module chunk (upvalue/local), not globally.
 --
--- Example lifecycle:
---   net.Start("foo")       -> _msg = { ... }
---   net.WriteString("bar")  -> _msg.data gets an entry
---   net.Send(ply)           -> serialize _msg, then _msg = nil
---   net.Abort()             -> _msg = nil
+--  Example:
+--    net.Start("foo")       -> _msg = { ... }
+--    net.WriteString("bar")  -> _msg.data gets an entry
+--    net.Send(ply)           -> serialize _msg, then _msg = nil
+--    net.Abort()             -> _msg = nil
 --
 -- A single execution context can therefore have only one message in flight.
 local _msg = nil
 
-local function _checkWrite(fn)
+local _readBuf = nil
+local _readPos = 1
+local _totalBits = 0
+local _readBits = 0
+
+local function _checkWrite( fn )
     if !_msg then
-        error("[net] " .. fn .. " called without net.Start", 2)
+        error("[net] " .. fn .. " called without net.Start!", 2)
     end
 end
 
-local function _append(tag, value, bits)
+-- Read
+local function _read( fn )
+    if !_readBuf then
+        error("[net] " .. fn .. " called outside of a net.Receive callback", 2)
+    end
+
+    local entry = _readBuf[_readPos]
+    if !entry then
+        error("[net] " .. fn .. ": read past end of message", 2)
+    end
+
+    _readPos = _readPos + 1
+    return entry
+end
+
+-- Write
+--  labeled as append for clarity because it stacks on different types of data
+--  rather than only allowing one at a time to be sent.
+--   eg. net.WriteString & net.WriteBool can be in the same message flight
+local function _append( tag, value, bits )
     _checkWrite("Write")
 
     local data = _msg.data
@@ -129,6 +179,28 @@ local function _append(tag, value, bits)
     if bits then
         _msg.bits = _msg.bits + bits
     end
+end
+
+local function _beginRead( payload )
+    if type(payload) ~= "table" then
+        error("[net] invalid payload: expected table", 0)
+    end
+
+    if type(payload.data) ~= "table" then
+        error("[net] invalid payload: missing data table", 0)
+    end
+
+    _readBuf = payload.data
+    _readPos = 1
+    _totalBits = tonumber(payload.bits) or 0
+    _readBits = 0
+end
+
+local function _endRead()
+    _readBuf = nil
+    _readPos = 1
+    _totalBits = 0
+    _readBits = 0
 end
 
 local function _makePayload()
@@ -148,18 +220,89 @@ local function _makePayload()
     return _msg.name, payload
 end
 
+local function _resolvePayload( payload )
+    if type(payload) ~= "table" then
+        return nil
+    end
+
+    if payload.id ~= nil then
+        local name = _idToName[payload.id]
+        if type(name) == "string" then
+            return name
+        end
+
+        ErrorNoHalt(
+            "[net] Received unknown net message ID " .. tostring(payload.id) .. "\n"
+        )
+        return nil
+    end
+
+    if type(payload.name) == "string" then
+        return payload.name
+    end
+
+    ErrorNoHalt("[net] Received net payload without a message name or ID\n")
+    return nil
+end
+
+local function _dispatchPayload( payload, ply )
+    local name = _resolvePayload(payload)
+    if !name then return end
+
+    local callback = net.Receivers[string.lower(name)]
+    if !callback then return end
+
+    local ok, err
+
+    _beginRead(payload)
+    ok, err = pcall(callback, 0, ply)
+    _endRead()
+
+    if !ok then
+        ErrorNoHalt(
+            "[net] Error in receiver '" .. name .. "': " .. tostring(err) .. "\n"
+        )
+    end
+end
+
+local _hooksInstalled = false
+
+local function _installTransportHooks()
+    if _hooksInstalled then return end
+    _hooksInstalled = true
+
+    if SERVER then
+        datastream.Hook( TRANSPORT, function( pl, handler, id, encoded, decoded )
+            _dispatchPayload(decoded, pl)
+        end )
+
+        hook.Add( "AcceptStream", "net_handshake", function( pl, handler, id )
+            if handler == TRANSPORT or handler == ADD_STRING or handler == SYNC_STRINGS then
+                return true
+            end
+        end )
+    else
+        datastream.Hook( TRANSPORT, function( handler, id, encoded, decoded )
+            _dispatchPayload(decoded, nil)
+        end )
+    end
+end
+
+
 -- ---------------------------------------------------------------------------
--- net.Start / net.Abort
+-- Start / Receive / Abort
 -- ---------------------------------------------------------------------------
 
-function net.Start(name, unreliable)
-    _validStringName(name, "Start")
+-- note: unreliable channel is simulated and silently does nothing :)
+-- it only exists for larping gmod 13's spec
+function net.Start( name, unreliable )
+    _isValidNWString(name, "Start")
 
     if netStringPool:GetBool() then
         local id = _nameToID[name]
         if !id then
             ErrorNoHalt(
-                "[net] net.Start: '" .. name .. "' was never passed to util.AddNetworkString\n"
+                "[net] Start: '" .. name .. "' was never passed to util.AddNetworkString\n"
             )
             _msg = nil
             return false
@@ -184,36 +327,54 @@ function net.Start(name, unreliable)
     return true
 end
 
+function net.Receive( name, callback )
+    _isValidNWString(name, "Receive")
+
+    if type(callback) ~= "function" then
+        error("[net] Receive: callback must be a function", 2)
+    end
+
+    net.Receivers[string.lower(name)] = callback
+    _installTransportHooks()
+end
+
 function net.Abort()
     _msg = nil
 end
+
+-- Install server-side transport hooks even before the first receiver is added,
+-- so client messages cannot race registration of the first net.Receive call.
+if SERVER then
+    _installTransportHooks()
+end
+
 
 -- ---------------------------------------------------------------------------
 -- Write functions
 -- ---------------------------------------------------------------------------
 
-function net.WriteString(str)
+function net.WriteString( str )
     if type(str) ~= "string" then
         error("[net] WriteString: expected string, got " .. type(str), 2)
     end
     _append("s", str, (#str + 1) * 8)
 end
 
-function net.WriteFloat(value)
+function net.WriteFloat( value )
     if type(value) ~= "number" then
         error("[net] WriteFloat: expected number, got " .. type(value), 2)
     end
     _append("f", value, 32)
 end
 
-function net.WriteDouble(value)
+function net.WriteDouble( value )
     if type(value) ~= "number" then
         error("[net] WriteDouble: expected number, got " .. type(value), 2)
     end
     _append("d", value, 64)
 end
 
-function net.WriteInt(value, bitCount)
+function net.WriteInt( value, bitCount )
     if type(value) ~= "number" then
         error("[net] WriteInt: expected number, got " .. type(value), 2)
     end
@@ -223,7 +384,7 @@ function net.WriteInt(value, bitCount)
     _append("i", value, bitCount)
 end
 
-function net.WriteUInt(value, bitCount)
+function net.WriteUInt( value, bitCount )
     if type(value) ~= "number" then
         error("[net] WriteUInt: expected number, got " .. type(value), 2)
     end
@@ -233,72 +394,92 @@ function net.WriteUInt(value, bitCount)
     _append("u", value, bitCount)
 end
 
-function net.WriteBit(value)
+function net.WriteBit( value )
     _append("b", value and 1 or 0, 1)
 end
-net.WriteBool = net.WriteBit
+net.WriteBool = net.WriteBit -- this is basically the same thing
 
-function net.WriteAngle(a)
-    if !a then
+function net.WriteAngle( ang )
+    if !ang then
         error("[net] WriteAngle: expected Angle", 2)
     end
-    _append("a", Angle(a.p, a.y, a.r), 96)
+    _append("a", Angle(ang.p, ang.y, ang.r), 96)
 end
 
-function net.WriteVector(v)
-    if !v then
+function net.WriteVector( vect )
+    if !vect then
         error("[net] WriteVector: expected Vector", 2)
     end
-    _append("v", Vector(v.x, v.y, v.z), 96)
+    _append("v", Vector(vect.x, vect.y, vect.z), 96)
 end
 
-function net.WriteNormal(v)
-    if !v then
+function net.WriteNormal( vect )
+    if !vect then
         error("[net] WriteNormal: expected Vector", 2)
     end
-    _append("n", Vector(v.x, v.y, v.z), 96)
+    _append("n", Vector(vect.x, vect.y, vect.z), 96)
 end
 
-function net.WriteColor(c, hasAlpha)
-    if !c then
+function net.WriteMatrix( mtrx )
+    if !mtrx then
+        error("[net] WriteMatrix: expected VMatrix", 2)
+    end
+
+    local data
+
+    -- gmod 12 doesn't expose the later GetField/ToTable/Unpack, etc. API functions included with gmod 13,
+    -- so preserve the matrix through the transformation API that it does expose.
+    -- TODO: try implementing the missing VMatrix functionality elsewhere
+    data = {
+        angle = mtrx:GetAngle(),
+        scale = mtrx:GetScale(),
+        translation = mtrx:GetTranslation()
+    }
+
+    _append("m", data, 0)
+end
+
+function net.WriteColor( col, hasAlpha )
+    if !col then
         error("[net] WriteColor: expected Color", 2)
     end
 
     hasAlpha = hasAlpha == nil and true or hasAlpha
 
     _append("c", {
-        r = c.r,
-        g = c.g,
-        b = c.b,
-        a = hasAlpha and c.a or 255
+        r = col.r,
+        g = col.g,
+        b = col.b,
+        a = hasAlpha and col.a or 255
     }, hasAlpha and 32 or 24)
 end
 
-function net.WriteEntity(ent)
+function net.WriteEntity( ent )
     local index = 0
-    if ent and IsValidEntity and IsValidEntity(ent) then
+    if ent and IsValid(ent) then
         index = ent:EntIndex()
     end
     _append("e", index, 16)
 end
 
-function net.WritePlayer(ply)
+function net.WritePlayer( ply )
     local index = 0
-    if ply and IsValidEntity and IsValidEntity(ply) then
+    if ply and IsValid(ply) then
         index = ply:EntIndex()
     end
     _append("p", index, 16)
 end
 
-function net.WriteTable(tbl, sequential)
+function net.WriteTable( tbl, seq )
     if type(tbl) ~= "table" then
         error("[net] WriteTable: expected table, got " .. type(tbl), 2)
     end
+
     -- Datastream/glon handles table serialization.
     _append("t", tbl, 0)
 end
 
-function net.WriteData(data, length)
+function net.WriteData( data, length )
     if type(data) ~= "string" then
         error("[net] WriteData: expected string, got " .. type(data), 2)
     end
@@ -311,126 +492,40 @@ function net.WriteData(data, length)
     _append("raw", value, #value * 8)
 end
 
-function net.WriteUInt64(value)
+function net.WriteUInt64( value )
     _append("u64", tostring(value), 64)
 end
 
-function net.WriteType(value)
-    local t = type(value)
+net.WriteVars = {
+    [TYPE_NIL]           = function ( n, val )       net.WriteUInt( n, 8 )                                    end,
+    [TYPE_STRING]        = function ( str, val )     net.WriteUInt( str, 8 )    net.WriteString( val )        end,
+    [TYPE_NUMBER]        = function ( num, val )     net.WriteUInt( num, 8 )    net.WriteDouble( val )        end,
+    [TYPE_TABLE]         = function ( tbl, val )     net.WriteUInt( tbl, 8 )    net.WriteTable( val )         end,
+    [TYPE_BOOL]          = function ( bool, val )    net.WriteUInt( bool, 8 )   net.WriteBool( val )          end,
+    [TYPE_ENTITY]        = function ( ent, val )     net.WriteUInt( ent, 8 )    net.WriteEntity( val )        end,
+    [TYPE_VECTOR]        = function ( vect, val )    net.WriteUInt( vect, 8 )   net.WriteVector( val )        end,
+    [TYPE_ANGLE]         = function ( ang, val )     net.WriteUInt( ang, 8 )    net.WriteAngle( val )         end,
+    [TYPE_MATRIX]        = function ( mtrx, val )    net.WriteUInt( mtrx, 8 )   net.WriteMatrix( val )        end,
+    [TYPE_COLOR]         = function ( col, val )     net.WriteUInt( col, 8 )    net.WriteColor( val )         end,
+}
 
-    if t == "string" then
-        _append("s", value, (#value + 1) * 8)
-    elseif t == "number" then
-        _append("d", value, 64)
-    elseif t == "boolean" then
-        _append("b", value and 1 or 0, 1)
-    elseif t == "table" then
-        _append("t", value, 0)
-    elseif t == "Vector" then
-        _append("v", Vector(value.x, value.y, value.z), 96)
-    elseif t == "Angle" then
-        _append("a", Angle(value.p, value.y, value.r), 96)
-    elseif t == "nil" then
-        _append("nil", false, 0)
+function net.WriteType( value )
+    local typeID = nil
+
+    if ( IsColor( value ) ) then
+        typeID = TYPE_COLOR
     else
-        ErrorNoHalt("[net] WriteType: unsupported type '" .. t .. "'\n")
-        _append("nil", false, 0)
+        typeID = TypeID( value )
     end
+
+    local wv = net.WriteVars[ typeID ]
+    if ( wv ) then return wv( typeID, value ) else
+        error( "[net] WriteType: Couldn't write " .. type( value ) .. " (type " .. typeID .. ")" )
+        return _append("nil", false, 0)
+    end
+
 end
 
-function net.WriteMatrix(matrix)
-    ErrorNoHalt("[net] WriteMatrix is not supported by the GMod 12 shim\n")
-end
-
--- ---------------------------------------------------------------------------
--- Incoming read state
--- ---------------------------------------------------------------------------
-
-local _readBuf = nil
-local _readPos = 1
-local _totalBits = 0
-local _readBits = 0
-
-local function _read(fn)
-    if !_readBuf then
-        error("[net] " .. fn .. " called outside of a net.Receive callback", 2)
-    end
-
-    local entry = _readBuf[_readPos]
-    if !entry then
-        error("[net] " .. fn .. ": read past end of message", 2)
-    end
-
-    _readPos = _readPos + 1
-    return entry
-end
-
-local function _beginRead(payload)
-    if !istable(payload) then
-        error("[net] invalid payload: expected table", 0)
-    end
-
-    if !istable(payload.data) then
-        error("[net] invalid payload: missing data table", 0)
-    end
-
-    _readBuf = payload.data
-    _readPos = 1
-    _totalBits = tonumber(payload.bits) or 0
-    _readBits = 0
-end
-
-local function _endRead()
-    _readBuf = nil
-    _readPos = 1
-    _totalBits = 0
-    _readBits = 0
-end
-
-local function _resolvePayloadName(payload)
-    if !istable(payload) then
-        return nil
-    end
-
-    if payload.id ~= nil then
-        local name = _idToName[payload.id]
-        if type(name) == "string" then
-            return name
-        end
-
-        ErrorNoHalt(
-            "[net] Received unknown net message ID " .. tostring(payload.id) .. "\n"
-        )
-        return nil
-    end
-
-    if type(payload.name) == "string" then
-        return payload.name
-    end
-
-    ErrorNoHalt("[net] Received net payload without a message name or ID\n")
-    return nil
-end
-
-local function _dispatch(payload, ply)
-    local name = _resolvePayloadName(payload)
-    if !name then return end
-
-    local callback = net.Receivers[string.lower(name)]
-    if !callback then return end
-
-    local ok, err
-
-    _beginRead(payload)
-    ok, err = pcall(callback, 0, ply)
-    _endRead()
-
-    if !ok then
-        ErrorNoHalt(
-            "[net] Error in receiver '" .. name .. "': " .. tostring(err) .. "\n"
-        )
-    end
-end
 
 -- ---------------------------------------------------------------------------
 -- Read functions
@@ -460,15 +555,21 @@ function net.ReadDouble()
     return e.v
 end
 
-function net.ReadInt(bitCount)
+function net.ReadInt( bitCount )
     local e = _read("ReadInt")
     _readBits = _readBits + (tonumber(bitCount) or 0)
     return e.v
 end
 
-function net.ReadUInt(bitCount)
+function net.ReadUInt( bitCount )
     local e = _read("ReadUInt")
     _readBits = _readBits + (tonumber(bitCount) or 0)
+    return e.v
+end
+
+function net.ReadUInt64()
+    local e = _read("ReadUInt64")
+    _readBits = _readBits + 64
     return e.v
 end
 
@@ -490,36 +591,62 @@ function net.ReadNormal()
     return e.v
 end
 
+function net.ReadMatrix()
+    local e = _read("ReadMatrix")
+    local data = e.v
+
+    if type(data) ~= "table" then
+        ErrorNoHalt("[net] ReadMatrix: invalid matrix payload\n")
+        return Matrix()
+    end
+
+    local mtrx = Matrix()
+
+    if data.angle then
+        mtrx:SetAngle(data.angle)
+    end
+
+    if data.scale then
+        mtrx:Scale(data.scale)
+    end
+
+    if data.translation then
+        mtrx:SetTranslation(data.translation)
+    end
+
+    return mtrx
+end
+
 function net.ReadEntity()
     local e = _read("ReadEntity")
+
     _readBits = _readBits + 16
+
     return Entity(tonumber(e.v) or 0)
 end
 
 function net.ReadPlayer()
     local e = _read("ReadPlayer")
+
     _readBits = _readBits + 16
+
     return Entity(tonumber(e.v) or 0)
 end
 
-function net.ReadUInt64()
-    local e = _read("ReadUInt64")
-    _readBits = _readBits + 64
-    return e.v
-end
-
-function net.ReadData(length)
+function net.ReadData( length )
     local e = _read("ReadData")
+
     length = tonumber(length) or 0
     _readBits = _readBits + length * 8
+
     return string.sub(e.v or "", 1, length)
 end
 
-function net.ReadTable(sequential)
+function net.ReadTable( seq )
     return _read("ReadTable").v
 end
 
-function net.ReadColor(hasAlpha)
+function net.ReadColor( hasAlpha )
     hasAlpha = hasAlpha == nil and true or hasAlpha
 
     local e = _read("ReadColor")
@@ -538,46 +665,37 @@ function net.ReadString()
     end
 
     _readBits = _readBits + (#value + 1) * 8
+
     return value
 end
 
-function net.ReadType(typeID)
-    local entry = _read("ReadType")
-    local t = entry.t
+net.ReadVars = {
+    [TYPE_NIL]       = function ()    return nil end,
+    [TYPE_STRING]    = function ()    return net.ReadString() end,
+    [TYPE_NUMBER]    = function ()    return net.ReadDouble() end,
+    [TYPE_TABLE]     = function ()    return net.ReadTable() end,
+    [TYPE_BOOL]      = function ()    return net.ReadBool() end,
+    [TYPE_ENTITY]    = function ()    return net.ReadEntity() end,
+    [TYPE_VECTOR]    = function ()    return net.ReadVector() end,
+    [TYPE_ANGLE]     = function ()    return net.ReadAngle() end,
+    [TYPE_MATRIX]    = function ()    return net.ReadMatrix() end,
+    [TYPE_COLOR]     = function ()    return net.ReadColor() end,
+}
 
-    if t == "nil" then
-        return nil
-    elseif t == "s" or t == "raw" or t == "u64" then
-        return entry.v
-    elseif t == "f" or t == "d" or t == "i" or t == "u" then
-        return entry.v
-    elseif t == "b" then
-        return entry.v == 1 or entry.v == true
-    elseif t == "t" then
-        return entry.v
-    elseif t == "v" or t == "n" then
-        return entry.v
-    elseif t == "a" then
-        return entry.v
-    elseif t == "c" then
-        local c = entry.v or {}
-        return Color(c.r or 0, c.g or 0, c.b or 0, c.a or 255)
-    elseif t == "e" or t == "p" then
-        return Entity(tonumber(entry.v) or 0)
+function net.ReadType( typeID )
+    local entry = _read("ReadType")
+    local typeID = typeID or entry.t
+
+    local rv = net.ReadVars[typeID]
+    if ( rv ) then return rv() else
+        error( "[net] ReadType: Couldn't read type " .. typeID )
     end
 
     return entry.v
 end
 
-function net.ReadMatrix()
-    ErrorNoHalt("[net] ReadMatrix is not supported by the GMod 12 shim\n")
-    return nil
-end
 
--- ---------------------------------------------------------------------------
 -- Size queries
--- ---------------------------------------------------------------------------
-
 function net.BytesWritten()
     if !_msg then return 0, 0 end
     return math.ceil(_msg.bits / 8), _msg.bits
@@ -589,57 +707,9 @@ function net.BytesLeft()
     return math.ceil(bitsLeft / 8), bitsLeft
 end
 
--- ---------------------------------------------------------------------------
--- Receive / datastream hooks
--- ---------------------------------------------------------------------------
-
-local _hooksInstalled = false
-
-local function _installTransportHooks()
-    if _hooksInstalled then return end
-    _hooksInstalled = true
-
-    if SERVER then
-        datastream.Hook(TRANSPORT, function(pl, handler, id, encoded, decoded)
-            _dispatch(decoded, pl)
-        end)
-
-        hook.Add("AcceptStream", "net_shim", function(pl, handler, id)
-            if handler == TRANSPORT or handler == ADD_STRING or handler == SYNC_STRINGS then
-                return true
-            end
-        end)
-    else
-        datastream.Hook(TRANSPORT, function(handler, id, encoded, decoded)
-            _dispatch(decoded, nil)
-        end)
-    end
-end
-
-function net.Receive(name, callback)
-    _validStringName(name, "Receive")
-
-    if type(callback) ~= "function" then
-        error("[net] Receive: callback must be a function", 2)
-    end
-
-    net.Receivers[string.lower(name)] = callback
-    _installTransportHooks()
-end
-
--- Install server-side transport hooks even before the first receiver is added,
--- so client messages cannot race registration of the first net.Receive call.
+-- Broadcast to clients
 if SERVER then
-    _installTransportHooks()
-end
-
--- ---------------------------------------------------------------------------
--- Send functions — server
--- ---------------------------------------------------------------------------
-
-if SERVER then
-
-    local function _sendToClients(target)
+    local function _sendToClients( target )
         local name, payload = _makePayload()
         _msg = nil
         datastream.StreamToClients(target, TRANSPORT, payload)
@@ -653,13 +723,13 @@ if SERVER then
         _sendToClients(player.GetAll())
     end
 
-    function net.SendOmit(ply)
+    function net.SendOmit( ply )
         _checkWrite("SendOmit")
 
         local filter = RecipientFilter()
         filter:AddAllPlayers()
 
-        if istable(ply) then
+        if type(ply) == "table" then
             for _, p in ipairs(ply) do
                 filter:RemovePlayer(p)
             end
@@ -670,7 +740,7 @@ if SERVER then
         _sendToClients(filter)
     end
 
-    function net.SendPVS(pos)
+    function net.SendPVS( pos )
         _checkWrite("SendPVS")
 
         local filter = RecipientFilter()
@@ -678,9 +748,8 @@ if SERVER then
         _sendToClients(filter)
     end
 
-    function net.SendPAS(pos)
-        -- GMod 12 does not expose AddPAS here; retain the old conservative PVS
-        -- approximation rather than silently broadcasting.
+    function net.SendPAS( pos )
+        -- gmod 12 does not expose AddPAS. PVS is close enough in most cases.
         _checkWrite("SendPAS")
 
         local filter = RecipientFilter()
@@ -689,10 +758,7 @@ if SERVER then
     end
 end
 
--- ---------------------------------------------------------------------------
--- Send functions — client
--- ---------------------------------------------------------------------------
-
+-- Talk to server from client
 if CLIENT then
     function net.SendToServer()
         local _, payload = _makePayload()
@@ -700,5 +766,6 @@ if CLIENT then
         datastream.StreamToServer(TRANSPORT, payload)
     end
 end
+
 
 return net

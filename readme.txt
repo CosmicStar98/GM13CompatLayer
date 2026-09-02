@@ -30,7 +30,6 @@ place in garrysmod/ folder.
 should be like this:
 garrysmod/lua/
 autorun/!!!sh_load.lua
-autorun/init.lua
 ext/
 libs/
 

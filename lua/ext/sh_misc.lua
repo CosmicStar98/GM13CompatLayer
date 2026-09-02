@@ -3,12 +3,13 @@ local util = util
 local _G = _G
 local PLAYER = FindMetaTable("Player")
 local SWEP = FindMetaTable("Weapon")
+local CVAR = FindMetaTable("ConVar")
 
 _G.IsPlayerSpeaking = function(ply)
     if !ply then return false end
     return ply:IsSpeaking()
 end
-PLAYER:GetAimVector = PLAYER:GetCursorAimVector
+PLAYER.GetAimVector = PLAYER.GetCursorAimVector
 SWEP.SetHoldType = SWEP.SetWeaponHoldType
 isValid = IsValid
 
@@ -25,6 +26,92 @@ end
 function sql.IndexExists( name )
     local r = sql.Query( "SELECT name FROM sqlite_master WHERE name=" .. SQLStr(name) .. " AND type='index'" )
     return r and true or false
+end
+
+function IsValid( object )
+    if ( !object ) then return false end
+
+    local isvalid = object.IsValid
+    if ( !isvalid ) then return false end
+
+    return isvalid( object )
+end
+
+-- Setter functions for the console variables
+--  note: these appear to lag behind and cause a situation where getting the value is unsynced from the set value
+--  nothing I can really do about that since these aren't coded on an engine level. I suggest wrapping them inside a timer
+--  whenever you need to use any of these.
+function CVAR:SetBool( value )
+    RunConsoleCommand( self:GetName(), value and "1" or "0" )
+end
+
+function CVAR:SetFloat( value )
+    RunConsoleCommand( self:GetName(), tostring(value) )
+end
+
+function CVAR:SetInt( value )
+    value = tonumber(value)
+
+    if value < 0 then
+        value = math.ceil(value)
+    else
+        value = math.floor(value)
+    end
+
+    RunConsoleCommand( self:GetName(), tostring(value) )
+end
+
+function CVAR:SetString( value )
+    RunConsoleCommand( self:GetName(), tostring(value) )
+end
+
+function CVAR:Revert()
+    RunConsoleCommand( self:GetName(), self:GetDefault() )
+end
+
+
+-- gmod 12 has FindMetaTable but not RegisterMetaTable
+-- FindMetaTable returns the metatable stored in _R with that name.
+-- therefor something like this works:
+--[[
+    local meta = {
+        MetaName = "__TEST__",
+        MetaID = 9999
+    }
+
+    r["__TEST__"] = meta
+
+    local found = FindMetaTable("__TEST__")
+
+    print("found:", found)
+    print("same:", found == meta)
+]]
+local _R = debug.getregistry()
+local _maxMetaID = 0
+
+-- MetaID seems irrelevant and we can't have an engine level assignment in lua alone
+-- so just make a random one and try our best to ensure it isn't taken
+for _, meta in pairs(_R) do
+    if type(meta) == "table" and type(meta.MetaID) == "number" then
+        _maxMetaID = math.max( _maxMetaID, meta.MetaID )
+    end
+end
+
+function RegisterMetaTable( name, tbl )
+    assert(type(name) == "string",
+        "bad argument #1 to RegisterMetaTable (string expected)")
+
+    assert(type(tbl) == "table",
+        "bad argument #2 to RegisterMetaTable (table expected)")
+
+    if _R[name] ~= nil then
+        error("MetaTable " .. name .. " already exists in the registry!")
+    end
+
+    tbl.MetaName = name
+    tbl.MetaID = math.random(_maxMetaID + 1, _maxMetaID + 1000)
+
+    _R[name] = tbl
 end
 
 game.GetWorld = GetWorldEntity or Entity(0)
@@ -138,120 +225,4 @@ if CLIENT then
             )
         else return makeFont(fontName, dataORsize, ...) end
     end
-end
-
--- Some type checking
-isentity = IsEntity
-function isnumber(num)     return type(num) == "number"    end
-function isbool(bool)      return type(bool) == "boolean"  end
-function isstring(str)     return type(str) == "string"    end
-function istable(tbl)      return type(tbl) == "table"     end
-function isvector(vec)     return type(vec) == "Vector"    end
-function isangle(ang)      return type(ang) == "Angle"     end
-function isfunction(func)  return type(func) == "function" end
-function ispanel(pnl)      return type(pnl) == "Panel"     end
-function isphysobj(obj)    return IsPhysicsObject(obj)     end
-function ismatrix(pill)
-    local neo, vec = pcall(function()
-        return pill:GetTranslation()
-    end)
-
-    return neo and type(vec) == "Vector"
-end
-
-function issound( snd )
-    local ok, result = pcall(function()
-        return type(snd.IsPlaying)    == "function"
-           and type(snd.ChangePitch)  == "function"
-           and type(snd.ChangeVolume) == "function"
-    end)
-    return ok and result == true
-end
-
-function IsValidMaterial( strName )
-    local mat, basetex
-
-    mat = Material( strName )
-    basetex = mat:GetMaterialTexture( "$basetexture" )
-
-    return !basetex:IsError()
-end
-
-
-
--- gotta catch em all!
---  most of https://wiki.facepunch.com/gmod/Enums/TYPE is unimplemented!
-rawset(_G, "TYPE_NONE",             -1)
-rawset(_G, "TYPE_INVALID",          -1)
-rawset(_G, "TYPE_NIL",               0)
-rawset(_G, "TYPE_BOOL",              1)
-rawset(_G, "TYPE_LIGHTUSERDATA",     2)
-rawset(_G, "TYPE_NUMBER",            3)
-rawset(_G, "TYPE_STRING",            4)
-rawset(_G, "TYPE_TABLE",             5)
-rawset(_G, "TYPE_FUNCTION",          6)
-rawset(_G, "TYPE_USERDATA",          7)
-rawset(_G, "TYPE_THREAD",            8)
-rawset(_G, "TYPE_ENTITY",            9)
-rawset(_G, "TYPE_VECTOR",           10)
-rawset(_G, "TYPE_ANGLE",            11)
-rawset(_G, "TYPE_PHYSOBJ",          12)
-rawset(_G, "TYPE_SAVE",             13)
-rawset(_G, "TYPE_RESTORE",          14)
-rawset(_G, "TYPE_DAMAGEINFO",       15)
-rawset(_G, "TYPE_EFFECTDATA",       16)
-rawset(_G, "TYPE_MOVEDATA",         17)
-rawset(_G, "TYPE_RECIPIENTFILTER",  18)
-rawset(_G, "TYPE_USERCMD",          19)
-rawset(_G, "TYPE_SCRIPTEDVEHICLE",  20)
-rawset(_G, "TYPE_MATERIAL",         21)
-rawset(_G, "TYPE_PANEL",            22)
-rawset(_G, "TYPE_PARTICLE",         23)
-rawset(_G, "TYPE_PARTICLEEMITTER",  24)
-rawset(_G, "TYPE_TEXTURE",          25)
-rawset(_G, "TYPE_USERMSG",          26)
-rawset(_G, "TYPE_CONVAR",           27)
-rawset(_G, "TYPE_IMESH",            28)
-rawset(_G, "TYPE_MATRIX",           29)
-rawset(_G, "TYPE_SOUND",            30)
-rawset(_G, "TYPE_PIXELVISHANDLE",   31)
-rawset(_G, "TYPE_DLIGHT",           32)
-rawset(_G, "TYPE_VIDEO",            33)
-rawset(_G, "TYPE_FILE",             34)
-rawset(_G, "TYPE_LOCOMOTION",       35)
-rawset(_G, "TYPE_PATH",             36)
-rawset(_G, "TYPE_NAVAREA",          37)
-rawset(_G, "TYPE_SOUNDHANDLE",      38)
-rawset(_G, "TYPE_NAVLADDER",        39)
-rawset(_G, "TYPE_PARTICLESYSTEM",   40)
-rawset(_G, "TYPE_PROJECTEDTEXTURE", 41)
-rawset(_G, "TYPE_PHYSCOLLIDE",      42)
-rawset(_G, "TYPE_SURFACEINFO",      43)
-rawset(_G, "TYPE_COUNT",            44)
-rawset(_G, "TYPE_COLOR",           255)
-
-local typeMap = {
-    ["nil"]      = TYPE_NIL,
-    ["string"]   = TYPE_STRING,
-    ["number"]   = TYPE_NUMBER,
-    ["table"]    = TYPE_TABLE,
-    ["boolean"]  = TYPE_BOOL,
-    ["function"] = TYPE_FUNCTION,
-    ["Entity"]   = TYPE_ENTITY,
-    ["Player"]   = TYPE_ENTITY,
-    ["NPC"]      = TYPE_ENTITY,
-    ["Vector"]   = TYPE_VECTOR,
-    ["Angle"]    = TYPE_ANGLE,
-    ["Color"]    = TYPE_COLOR,
-}
-
-function TypeID( v )
-    -- special exemptions from doing type when type(v) doesnt return anything we want
-    if IsPhysicsObject(v) then return TYPE_PHYSOBJ end
-    if IsValidMaterial(v) then return TYPE_MATERIAL end
-    if ConVarExists(v) then return TYPE_CONVAR end
-    if ismatrix(v) then return TYPE_MATRIX end
-    if issound(v) then return TYPE_SOUND end
-
-    return typeMap[type(v)] or TYPE_NIL
 end

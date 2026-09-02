@@ -52,26 +52,26 @@ end
 
 _G.DEFINE_BASECLASS = baseclass.Get
 
+--[[
 -- Patch scripted_ents.Register so every entity class is automatically
 -- registered as a base class when it is registered as an entity.
-local _orig_sents_register = scripted_ents.Register
+local oldSENTRegister = scripted_ents.Register
 function scripted_ents.Register( tab, name, reload )
-    _orig_sents_register( tab, name, reload )
+    oldSENTRegister( tab, name, reload )
     baseclass.Set( name, tab )
 end
 
 -- Patch weapons.Register for the same reason.
-local _orig_weapons_register = weapons.Register
+local oldSWEPRegister = weapons.Register
 function weapons.Register( tab, name )
-    _orig_weapons_register( tab, name )
+    oldSWEPRegister( tab, name )
     baseclass.Set( name, tab )
 end
 
---
--- Patch gamemode.Register.
--- this fucks shit up. do not uncomment for now!!!
---[[local _orig_gm_register = gamemode.Register
-function gamemode.Register( gm, name )
-    _orig_gm_register( gm, name )
-    baseclass.Set( "gamemode_" .. name, gm )
+if CLIENT then
+    local oldVGUIRegister = vgui.Register
+    vgui.Register = function( classname, tab, base )
+        oldVGUIRegister( classname, tab, base )
+        baseclass.Set( classname, tab )
+    end
 end ]]
