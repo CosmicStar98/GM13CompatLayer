@@ -135,67 +135,11 @@ local typeMap = {
     ["dlight_t"]           = TYPE_DLIGHT
 }
 
--- This is for special cases where we need to go through
--- a different route to validate what something is.
-local typeOverrides = {
-    {
-        name = "Color",
-        id   = TYPE_COLOR,
-        test = IsColor,
-    },
-    {
-        name = "thread",
-        id   = TYPE_THREAD,
-        test = isthread,
-    } --[[,
-    {
-        name = "VMatrix",
-        id   = TYPE_MATRIX,
-        test = ismatrix,
-    },
-    {
-        name = "IMaterial",
-        id   = TYPE_MATERIAL,
-        test = IsValidMaterial,
-    },
-    {
-        name = "ConVar",
-        id   = TYPE_CONVAR,
-        test = ConVarExists,
-    },
-    {
-        name = "PhysObj",
-        id   = TYPE_PHYSOBJ,
-        test = IsPhysicsObject,
-    },
-    {
-        name = "CSoundPatch",
-        id   = TYPE_SOUND,
-        test = issound,
-    } ]] -- not needed. kept as an example
-}
-
-local function getTypeOverride( v )
-    for i = 1, #typeOverrides do
-        local override = typeOverrides[i]
-
-        if override.test(v) then
-            return override
-        end
-    end
-
-    return nil
-end
-
 -- type override so we can return the correct type for our custom types
 local oldtype = type
 local getmetatable = getmetatable
 function type( value )  -- returns a type name
     local native = oldtype(value)
-
-    -- special checks from doing type when getmetatable doesnt return anything we want.
-    --local override = getTypeOverride(value)
-    --if override then return override.name end
 
     -- if the type doesn't map into what is done natively by the original type
     -- then begin to probe the metatables and provide a name.
