@@ -36,6 +36,6 @@ Code formatting is defined by [these style guidelines](https://github.com/CFC-Se
 
 ### Don't submit code written by AI.
 
-Submitting code to this repository authored by Degenerative AI tools (LLMs, agentic coding tools, etc...) is strictly forbidden. Pull requests that are clearly vibe-coded or written by an LLM will be closed.
+Submitting code to this repository authored by Generative AI tools (LLMs, agentic coding tools, etc...) is strictly forbidden. Pull requests that are clearly vibe-coded or written by an LLM will be closed.
 
 > **Rationale:** Contributors are expected to both fully understand the code that they write **and** have the necessary skills to *maintain it*. Opening PRs containing code that you did not write yourself more often than not fails to meet either of these expectations, therefore it is disallowed.
